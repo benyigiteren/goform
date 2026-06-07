@@ -1,0 +1,17 @@
+services:
+  goform:
+    # Pull pre-built image, or build locally with `docker compose build`
+    image: ghcr.io/benyigiteren/goform:latest
+    build: .
+    container_name: goform
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    volumes:
+      - goform-data:/data
+    environment:
+      - GOFORM_ADDR=:3000
+      - GOFORM_DATA=/data
+
+volumes:
+  goform-data:

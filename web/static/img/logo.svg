@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 40 40" fill="none">
+  <defs>
+    <linearGradient id="goform-bg" x1="0" y1="0" x2="40" y2="40" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#6366F1"/>
+      <stop offset="100%" stop-color="#8B5CF6"/>
+    </linearGradient>
+  </defs>
+  <rect width="40" height="40" rx="10" fill="url(#goform-bg)"/>
+  <!-- G letter with built-in form bracket -->
+  <path d="M22 9.5h-5.5A5.5 5.5 0 0 0 11 15v10a5.5 5.5 0 0 0 5.5 5.5h7A5.5 5.5 0 0 0 29 25v-4.5a1.5 1.5 0 0 0-1.5-1.5h-6a1.5 1.5 0 0 0 0 3H26V25a2.5 2.5 0 0 1-2.5 2.5h-7A2.5 2.5 0 0 1 14 25V15a2.5 2.5 0 0 1 2.5-2.5H22a1.5 1.5 0 0 0 0-3Z" fill="white"/>
+  <!-- Accent dot -->
+  <circle cx="29.5" cy="11.5" r="2.5" fill="#FCD34D"/>
+</svg>

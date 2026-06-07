@@ -1,0 +1,225 @@
+<!doctype html>
+<html lang="tr">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Panel — goform</title>
+  <link rel="icon" type="image/svg+xml" href="/static/img/favicon.svg">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/static/css/style.css">
+</head>
+<body>
+  <main class="page">
+    <div class="page-header">
+      <div>
+        <h1>Formlarım</h1>
+        <p id="subText">Sürükle bırak ile saniyeler içinde form oluştur.</p>
+      </div>
+      <div class="row">
+        <button class="btn" id="scopeBtn" style="display:none">
+          <span id="scopeIcon"></span>
+          <span id="scopeLabel">Sadece benim</span>
+        </button>
+        <button class="btn btn-primary" id="newFormBtn">
+          <span id="plusIcon"></span>
+          Yeni form
+        </button>
+      </div>
+    </div>
+    <div id="formsContainer">
+      <div class="center"><span class="spinner spinner-lg"></span></div>
+    </div>
+  </main>
+
+  <script src="/static/js/icons.js"></script>
+  <script src="/static/js/common.js"></script>
+  <script src="/static/js/templates.js"></script>
+  <script>
+    var me = null;
+    var scope = localStorage.getItem('goform-scope') || 'mine';
+
+    document.getElementById('plusIcon').innerHTML = Icons.plus({ size: 14 });
+
+    async function init() {
+      try {
+        me = await api('/api/auth/me');
+      } catch (e) { location.href = '/login'; return; }
+      renderNav({ user: me });
+      if (me.role === 'admin') {
+        document.getElementById('scopeBtn').style.display = '';
+        updateScopeBtn();
+        document.getElementById('scopeBtn').onclick = function () {
+          scope = scope === 'mine' ? 'all' : 'mine';
+          localStorage.setItem('goform-scope', scope);
+          updateScopeBtn();
+          loadForms();
+        };
+      }
+      loadForms();
+    }
+
+    function updateScopeBtn() {
+      document.getElementById('scopeLabel').textContent = scope === 'mine' ? 'Sadece benim' : 'Tüm formlar';
+      document.getElementById('scopeIcon').innerHTML = Icons[scope === 'mine' ? 'user' : 'users']({ size: 14 });
+    }
+
+    async function loadForms() {
+      var c = document.getElementById('formsContainer');
+      try {
+        var url = '/api/forms' + (scope === 'all' && me.role === 'admin' ? '?scope=all' : '');
+        var forms = await api(url);
+        if (forms.length === 0) {
+          c.innerHTML =
+            '<div class="empty">' +
+              '<div class="empty-icon">' + Icons.layout({ size: 24 }) + '</div>' +
+              '<h3>Henüz form yok</h3>' +
+              '<p>İlk formunuzu oluşturun: sıfırdan başlayın veya hazır bir şablon seçin.</p>' +
+              '<button class="btn btn-primary" onclick="showTemplatesModal()">' + Icons.plus({ size: 14 }) + ' Yeni form</button>' +
+            '</div>';
+          return;
+        }
+        c.innerHTML = '<div class="forms-grid">' + forms.map(renderCard).join('') + '</div>';
+        attachCardEvents();
+      } catch (e) {
+        c.innerHTML = '<div class="empty"><h3>Formlar yüklenemedi</h3><p>' + esc(e.message) + '</p></div>';
+      }
+    }
+
+    function renderCard(f) {
+      var badge = f.accepting
+        ? '<span class="badge live">Aktif</span>'
+        : '<span class="badge paused">' + Icons.pause({ size: 10 }) + ' Kapalı</span>';
+      var ownerLabel = me.role === 'admin' && scope === 'all' && f.owner && f.owner.id !== me.id
+        ? '<span class="badge">' + Icons.user({ size: 10 }) + ' ' + esc(f.owner.name) + '</span>'
+        : '';
+      var themeColor = (f.theme && f.theme.color) || 'indigo';
+      var themeIcon = (f.theme && f.theme.icon) || '';
+      var titleStyle = '';
+      var coverHtml = themeIcon
+        ? '<div style="font-size:22px; line-height:1; margin-bottom:4px">' + esc(themeIcon) + '</div>'
+        : '';
+      return '<div class="form-card" data-id="' + f.id + '" tabindex="0" style="border-top:3px solid transparent; background-image:linear-gradient(var(--surface),var(--surface)),' + formThemeGradient(themeColor) + '; background-origin:border-box; background-clip:padding-box,border-box">' +
+        '<div class="row-between">' +
+          '<div class="row gap-2">' + badge + ownerLabel + '</div>' +
+          '<div class="form-card-actions">' +
+            '<button class="btn btn-ghost btn-icon btn-sm" data-action="share" data-id="' + f.id + '" title="Paylaş">' + Icons.share({ size: 14 }) + '</button>' +
+            '<button class="btn btn-ghost btn-icon btn-sm" data-action="responses" data-id="' + f.id + '" title="Yanıtlar">' + Icons.chart({ size: 14 }) + '</button>' +
+            '<button class="btn btn-ghost btn-icon btn-sm" data-action="delete" data-id="' + f.id + '" title="Sil">' + Icons.trash({ size: 14 }) + '</button>' +
+          '</div>' +
+        '</div>' +
+        '<div>' +
+          coverHtml +
+          '<div class="form-card-title">' + esc(f.title || 'İsimsiz') + '</div>' +
+          (f.description ? '<div class="form-card-desc">' + esc(f.description) + '</div>' : '<div class="form-card-desc">&nbsp;</div>') +
+        '</div>' +
+        '<div class="form-card-meta">' +
+          '<span>' + Icons.inbox({ size: 11 }) + ' ' + f.responseCount + ' yanıt</span>' +
+          '<span>' + timeAgo(f.updatedAt) + '</span>' +
+        '</div>' +
+      '</div>';
+    }
+
+    function attachCardEvents() {
+      document.querySelectorAll('.form-card').forEach(function (card) {
+        card.addEventListener('click', function (e) {
+          var actionBtn = e.target.closest('[data-action]');
+          if (actionBtn) {
+            e.stopPropagation();
+            handleAction(actionBtn.dataset.action, actionBtn.dataset.id);
+            return;
+          }
+          location.href = '/build/' + card.dataset.id;
+        });
+        card.addEventListener('keydown', function (e) {
+          if (e.key === 'Enter') location.href = '/build/' + card.dataset.id;
+        });
+      });
+    }
+
+    async function handleAction(action, id) {
+      if (action === 'share') {
+        showShareModal('/f/' + id);
+      } else if (action === 'responses') {
+        location.href = '/responses/' + id;
+      } else if (action === 'delete') {
+        var ok = await confirmDialog({
+          title: 'Formu sil',
+          message: 'Bu formu ve tüm yanıtlarını kalıcı olarak silmek istediğinize emin misiniz?',
+          confirmText: 'Sil',
+          danger: true,
+        });
+        if (!ok) return;
+        try {
+          await api('/api/forms/' + id, { method: 'DELETE' });
+          toast('Form silindi', 'success');
+          loadForms();
+        } catch (e) { toast(e.message, 'error'); }
+      }
+    }
+
+    async function showShareModal(path) {
+      var status = {};
+      try { status = await api('/api/status'); } catch (e) {}
+      var base = status.publicUrl || location.origin;
+      var url = base + path;
+      modal({
+        title: 'Formu paylaş',
+        subtitle: 'Bu bağlantıya sahip herkes formu doldurabilir.',
+        body:
+          '<div class="code-block" id="shareUrl">' + esc(url) + '</div>' +
+          '<div class="mt-3 text-small text-muted">Form sahibi yanıt almayı durdurabilir.</div>',
+        footer:
+          '<button class="btn" data-modal-close>Kapat</button>' +
+          '<button class="btn btn-primary" id="copyBtn">' + Icons.copy({ size: 14 }) + ' Bağlantıyı kopyala</button>' +
+          '<a class="btn" href="' + url + '" target="_blank" rel="noopener">' + Icons.eye({ size: 14 }) + ' Önizle</a>',
+        onMount: function (el, close) {
+          el.querySelector('#copyBtn').onclick = async function () {
+            await navigator.clipboard.writeText(url);
+            toast('Bağlantı kopyalandı', 'success');
+            close();
+          };
+        }
+      });
+    }
+
+    window.showTemplatesModal = function () {
+      var body = '<div class="template-grid">';
+      Templates.forEach(function (t) {
+        var color = FormThemeColors.find(function (c) { return c.key === t.color; }) || FormThemeColors[0];
+        var iconHtml = Icons[t.icon] ? Icons[t.icon]({ size: 18 }) : Icons.plus({ size: 18 });
+        body += '<button class="template-card" data-template="' + t.key + '">' +
+          '<div class="template-card-icon" style="background: linear-gradient(135deg, ' + color.from + ', ' + color.to + ')">' + iconHtml + '</div>' +
+          '<div class="template-card-title">' + esc(t.title) + '</div>' +
+          '<div class="template-card-desc">' + esc(t.description) + '</div>' +
+        '</button>';
+      });
+      body += '</div>';
+      modal({
+        title: 'Yeni form oluştur',
+        subtitle: 'Sıfırdan başlayın veya hazır bir şablon seçin.',
+        lg: true,
+        body: body,
+        onMount: function (el, close) {
+          el.querySelectorAll('[data-template]').forEach(function (b) {
+            b.addEventListener('click', async function () {
+              var t = Templates.find(function (x) { return x.key === b.dataset.template; });
+              var preset = t.build();
+              try {
+                var form = await api('/api/forms', { method: 'POST', body: preset });
+                close();
+                location.href = '/build/' + form.id;
+              } catch (e) { toast(e.message, 'error'); }
+            });
+          });
+        }
+      });
+    };
+
+    document.getElementById('newFormBtn').onclick = showTemplatesModal;
+
+    init();
+  </script>
+</body>
+</html>

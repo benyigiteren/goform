@@ -1,0 +1,254 @@
+<!doctype html>
+<html lang="tr">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Form — goform</title>
+  <link rel="icon" type="image/svg+xml" href="/static/img/favicon.svg">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/static/css/style.css">
+  <script>
+    /* Apply light theme by default for public form view BEFORE common.js loads */
+    (function () {
+      try {
+        var stored = localStorage.getItem('goform-form-theme-' + location.pathname);
+        document.documentElement.setAttribute('data-theme', stored || 'light');
+      } catch (e) {
+        document.documentElement.setAttribute('data-theme', 'light');
+      }
+    })();
+  </script>
+</head>
+<body class="view-body">
+  <div class="view-page">
+    <div id="root" class="view-container">
+      <div class="center"><span class="spinner spinner-lg"></span></div>
+    </div>
+    <div id="powered"></div>
+  </div>
+
+  <script src="/static/js/icons.js"></script>
+  <script src="/static/js/common.js"></script>
+  <script src="/static/js/fields.js"></script>
+  <script src="/static/js/templates.js"></script>
+  <script>
+    var formId = location.pathname.split('/').pop();
+    var root = document.getElementById('root');
+    var form = null;
+    var answers = {};
+
+    document.getElementById('powered').innerHTML = renderPoweredBy();
+
+    async function init() {
+      var data;
+      try {
+        data = await api('/api/public/forms/' + formId);
+      } catch (e) {
+        // e.data may contain { code, error, formTitle, theme, ... }
+        var info = e.data || {};
+        applyTheme(info.theme);
+        if (e.status === 404 || info.code === 'not_found') {
+          return showStatePage({
+            kind: 'error',
+            title: 'Form bulunamadı',
+            message: 'Bu bağlantı geçerli değil ya da form silinmiş olabilir.',
+          });
+        }
+        if (info.code === 'form_closed') {
+          return showStatePage({
+            kind: 'paused',
+            title: info.formTitle || 'Form kapalı',
+            heading: 'Bu form yanıt kabul etmiyor',
+            message: info.error || 'Bu form sahibi tarafından durdurulmuştur.',
+          });
+        }
+        if (info.code === 'max_reached') {
+          return showStatePage({
+            kind: 'full',
+            title: info.formTitle || 'Form dolu',
+            heading: 'Bu form artık yanıt kabul etmiyor',
+            message: info.error || 'Bu form maksimum yanıt sayısına ulaşmıştır.',
+            extra: info.responseCount && info.maxResponses
+              ? info.responseCount + ' / ' + info.maxResponses + ' yanıt'
+              : null,
+          });
+        }
+        return showStatePage({
+          kind: 'error',
+          title: 'Hata',
+          message: e.message || 'Bir hata oluştu.',
+        });
+      }
+      form = data;
+      applyTheme(form.theme);
+      renderForm();
+    }
+
+    function applyTheme(themeObj) {
+      var theme = themeObj || {};
+      // mode: 'light' (default) | 'dark' | 'auto'
+      var mode = theme.mode || 'light';
+      if (mode === 'auto') {
+        document.documentElement.removeAttribute('data-theme');
+      } else {
+        document.documentElement.setAttribute('data-theme', mode === 'dark' ? 'dark' : 'light');
+      }
+      var color = theme.color || 'indigo';
+      var grad = formThemeGradient(color);
+      document.documentElement.style.setProperty('--form-gradient', grad);
+    }
+
+    function showStatePage(opts) {
+      document.title = (opts.title || 'goform') + ' — goform';
+      var iconBg, iconColor, icon;
+      if (opts.kind === 'paused') {
+        iconBg = 'var(--warning-soft)'; iconColor = 'var(--warning)';
+        icon = Icons.pause({ size: 28 });
+      } else if (opts.kind === 'full') {
+        iconBg = 'var(--info-soft)'; iconColor = 'var(--info)';
+        icon = Icons.inbox({ size: 28 });
+      } else {
+        iconBg = 'var(--danger-soft)'; iconColor = 'var(--danger)';
+        icon = Icons.xCircle({ size: 28 });
+      }
+      root.innerHTML =
+        '<div class="success-page">' +
+          '<div class="icon-wrap" style="background:' + iconBg + '; color:' + iconColor + '">' + icon + '</div>' +
+          '<h2>' + esc(opts.heading || opts.title) + '</h2>' +
+          '<p style="max-width:380px; margin:0 auto 16px">' + esc(opts.message) + '</p>' +
+          (opts.extra ? '<div class="badge" style="margin-bottom:14px">' + esc(opts.extra) + '</div>' : '') +
+        '</div>';
+    }
+
+    function renderForm() {
+      document.title = (form.title || 'Form') + ' — goform';
+      var iconBadge = '';
+      if (form.theme && form.theme.icon) {
+        iconBadge = '<div class="form-icon-badge">' + esc(form.theme.icon) + '</div>';
+      }
+      var counter = '';
+      if (form.maxResponses) {
+        counter = '<span class="badge" title="Bu form için yanıt sınırı vardır">' + Icons.inbox({ size: 11 }) + ' Maks ' + form.maxResponses + ' yanıt</span>';
+      }
+      var html =
+        '<div class="view-header">' +
+          iconBadge +
+          '<h1>' + esc(form.title || 'İsimsiz form') + '</h1>' +
+          (form.description ? '<p>' + esc(form.description) + '</p>' : '') +
+          '<div class="row gap-2 mt-3" style="flex-wrap:wrap">' +
+            '<span class="text-muted text-small">* Zorunlu alanları belirtir</span>' +
+            counter +
+          '</div>' +
+        '</div>' +
+        (form.fields || []).map(renderViewField).join('') +
+        '<div class="view-actions">' +
+          '<span class="text-muted text-small">' + (form.fields ? form.fields.filter(function(f){return f.type!=="section";}).length : 0) + ' soru</span>' +
+          '<button class="btn btn-primary btn-lg" id="submitBtn">' + Icons.check({ size: 14 }) + ' Gönder</button>' +
+        '</div>';
+      root.innerHTML = html;
+
+      (form.fields || []).forEach(function (field) {
+        if (field.type === 'section') return;
+        attachFieldInteractive(root, field, function (id, val) {
+          answers[id] = val;
+          var card = root.querySelector('[data-field-card="' + id + '"]');
+          if (card) {
+            card.classList.remove('error');
+            var err = card.querySelector('.view-field-error');
+            if (err) err.remove();
+          }
+        });
+      });
+
+      document.getElementById('submitBtn').onclick = submitForm;
+    }
+
+    function renderViewField(field) {
+      if (field.type === 'section') {
+        return '<div style="padding:18px 4px 6px">' +
+          '<h2 style="font-size:18px; font-weight:600; letter-spacing:-0.01em; margin-bottom:4px">' + esc(field.label) + '</h2>' +
+          (field.description ? '<p class="text-muted text-small">' + esc(field.description) + '</p>' : '') +
+        '</div>';
+      }
+      return '<div class="view-field" data-field-card="' + field.id + '">' +
+        '<label class="view-field-label">' + esc(field.label || 'Soru') +
+          (field.required ? '<span style="color:var(--danger)">*</span>' : '') +
+        '</label>' +
+        (field.description ? '<div class="view-field-desc">' + esc(field.description) + '</div>' : '') +
+        renderFieldPreview(field, { interactive: true }) +
+      '</div>';
+    }
+
+    async function submitForm() {
+      var errors = [];
+      (form.fields || []).forEach(function (field) {
+        if (field.type === 'section') return;
+        var msg = validateField(field, answers[field.id]);
+        if (msg) errors.push({ id: field.id, msg: msg });
+      });
+      root.querySelectorAll('.view-field.error').forEach(function (el) { el.classList.remove('error'); });
+      root.querySelectorAll('.view-field-error').forEach(function (el) { el.remove(); });
+
+      if (errors.length > 0) {
+        errors.forEach(function (e) {
+          var card = root.querySelector('[data-field-card="' + e.id + '"]');
+          if (card) {
+            card.classList.add('error');
+            var err = document.createElement('div');
+            err.className = 'view-field-error';
+            err.textContent = e.msg;
+            card.appendChild(err);
+          }
+        });
+        var first = root.querySelector('.view-field.error');
+        if (first) first.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        return;
+      }
+
+      var btn = document.getElementById('submitBtn');
+      btn.disabled = true;
+      btn.innerHTML = '<span class="spinner"></span> Gönderiliyor...';
+
+      try {
+        await api('/api/public/forms/' + formId + '/responses', { method: 'POST', body: answers });
+        showSuccess();
+      } catch (e) {
+        var info = e.data || {};
+        if (info.code === 'form_closed') {
+          return showStatePage({
+            kind: 'paused',
+            title: form.title,
+            heading: 'Form artık kapalı',
+            message: info.error || 'Bu form sahibi tarafından durdurulmuştur.',
+          });
+        }
+        if (info.code === 'max_reached') {
+          return showStatePage({
+            kind: 'full',
+            title: form.title,
+            heading: 'Form artık dolu',
+            message: info.error || 'Bu form maksimum yanıt sayısına ulaşmıştır.',
+          });
+        }
+        btn.disabled = false;
+        btn.innerHTML = Icons.check({ size: 14 }) + ' Tekrar dene';
+        toast(e.message || 'Gönderim başarısız', 'error');
+      }
+    }
+
+    function showSuccess() {
+      root.innerHTML =
+        '<div class="success-page">' +
+          '<div class="icon-wrap">' + Icons.check({ size: 28 }) + '</div>' +
+          '<h2>Yanıtınız alındı</h2>' +
+          '<p>Katılımınız için teşekkür ederiz.</p>' +
+          '<button class="btn" onclick="location.reload()">' + Icons.plus({ size: 14 }) + ' Yeni yanıt gönder</button>' +
+        '</div>';
+    }
+
+    init();
+  </script>
+</body>
+</html>

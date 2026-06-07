@@ -1,0 +1,23 @@
+# Local data (sqlite db)
+data/
+*.db
+*.db-wal
+*.db-shm
+
+# Build outputs
+goform
+goform.exe
+/dist
+/bin
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Logs
+*.log

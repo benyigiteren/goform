@@ -1,0 +1,15 @@
+.git
+.gitignore
+.dockerignore
+README.md
+LICENSE
+Dockerfile
+docker-compose.yml
+data/
+*.db
+*.db-wal
+*.db-shm
+goform
+goform.exe
+node_modules/
+*.log

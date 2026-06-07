@@ -1,0 +1,514 @@
+<!doctype html>
+<html lang="tr">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Ayarlar — goform</title>
+  <link rel="icon" type="image/svg+xml" href="/static/img/favicon.svg">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/static/css/style.css">
+</head>
+<body>
+  <main class="page">
+    <div class="page-header">
+      <div>
+        <h1>Ayarlar</h1>
+        <p>Hesabınızı, kullanıcıları ve API erişimini yönetin.</p>
+      </div>
+    </div>
+
+    <div class="settings-layout">
+      <nav class="settings-nav">
+        <button data-section="profile" class="active">${Icons.user} Profil</button>
+        <button data-section="security">${Icons.lock} Güvenlik</button>
+        <button data-section="appearance">${Icons.sparkles} Görünüm</button>
+        <button data-section="tokens">${Icons.key} API Erişimi</button>
+        <button data-section="users" id="usersTab" style="display:none">${Icons.users} Kullanıcılar</button>
+        <button data-section="about">${Icons.info} Hakkında</button>
+      </nav>
+
+      <div id="content">
+        <div class="center"><span class="spinner spinner-lg"></span></div>
+      </div>
+    </div>
+  </main>
+
+  <script src="/static/js/icons.js"></script>
+  <script src="/static/js/common.js"></script>
+  <script>
+    var me = null;
+    var section = 'profile';
+
+    document.querySelectorAll('[data-section]').forEach(function (b) {
+      b.innerHTML = b.innerHTML.replace(/\$\{Icons\.(\w+)\}/, function (_, n) { return Icons[n] ? Icons[n]({ size: 14 }) : ''; });
+      b.addEventListener('click', function () {
+        section = b.dataset.section;
+        document.querySelectorAll('[data-section]').forEach(function (x) { x.classList.toggle('active', x === b); });
+        renderSection();
+      });
+    });
+
+    async function init() {
+      try { me = await api('/api/auth/me'); }
+      catch (e) { location.href = '/login'; return; }
+      renderNav({ user: me });
+      if (me.role === 'admin') document.getElementById('usersTab').style.display = '';
+      renderSection();
+    }
+
+    function renderSection() {
+      var c = document.getElementById('content');
+      if (section === 'profile') return renderProfile(c);
+      if (section === 'security') return renderSecurity(c);
+      if (section === 'appearance') return renderAppearance(c);
+      if (section === 'tokens') return renderTokens(c);
+      if (section === 'users') return renderUsers(c);
+      if (section === 'about') return renderAbout(c);
+    }
+
+    /* ===== Profile ===== */
+    function renderProfile(c) {
+      c.innerHTML =
+        '<div class="card">' +
+          '<div class="card-header"><h2>Profil bilgileri</h2><p>Adınızı güncelleyin.</p></div>' +
+          '<div class="card-body">' +
+            '<div class="field">' +
+              '<label class="field-label">E-posta</label>' +
+              '<input class="input" value="' + esc(me.email) + '" disabled>' +
+              '<div class="field-hint">E-posta değiştirilemez.</div>' +
+            '</div>' +
+            '<div class="field">' +
+              '<label class="field-label">Ad Soyad</label>' +
+              '<input class="input" id="nameInput" value="' + esc(me.name) + '">' +
+            '</div>' +
+            '<div class="field">' +
+              '<label class="field-label">Rol</label>' +
+              '<input class="input" value="' + (me.role === 'admin' ? 'Süper admin' : 'Kullanıcı') + '" disabled>' +
+            '</div>' +
+          '</div>' +
+          '<div class="card-footer">' +
+            '<button class="btn btn-primary" id="saveProfile">' + Icons.save({ size: 14 }) + ' Kaydet</button>' +
+          '</div>' +
+        '</div>';
+      document.getElementById('saveProfile').onclick = async function () {
+        if (me.role !== 'admin') {
+          toast('Yalnızca yönetici profilinizi düzenleyebilir.', 'error');
+          return;
+        }
+        try {
+          var updated = await api('/api/users/' + me.id, { method: 'PUT', body: { name: document.getElementById('nameInput').value.trim(), role: me.role } });
+          me = updated;
+          toast('Profil güncellendi', 'success');
+          location.reload();
+        } catch (e) { toast(e.message, 'error'); }
+      };
+    }
+
+    /* ===== Security (change password) ===== */
+    function renderSecurity(c) {
+      c.innerHTML =
+        '<div class="card">' +
+          '<div class="card-header"><h2>Şifre değiştir</h2><p>Diğer tüm oturumlar sonlandırılır.</p></div>' +
+          '<div class="card-body">' +
+            '<div class="field">' +
+              '<label class="field-label">Mevcut şifre</label>' +
+              passwordField('currentPw', { autocomplete: 'current-password' }) +
+            '</div>' +
+            '<div class="field">' +
+              '<label class="field-label">Yeni şifre</label>' +
+              passwordField('newPw', { autocomplete: 'new-password', minlength: 8 }) +
+              '<div class="field-hint">En az 8 karakter</div>' +
+            '</div>' +
+            '<div class="field">' +
+              '<label class="field-label">Yeni şifre (tekrar)</label>' +
+              passwordField('newPw2', { autocomplete: 'new-password', minlength: 8 }) +
+            '</div>' +
+            '<div id="pwError" class="field-error hidden"></div>' +
+          '</div>' +
+          '<div class="card-footer">' +
+            '<button class="btn btn-primary" id="changePwBtn">' + Icons.lock({ size: 14 }) + ' Şifreyi değiştir</button>' +
+          '</div>' +
+        '</div>';
+      attachPasswordToggles(c);
+      document.getElementById('changePwBtn').onclick = async function () {
+        var cur = document.getElementById('currentPw').value;
+        var p1 = document.getElementById('newPw').value;
+        var p2 = document.getElementById('newPw2').value;
+        var err = document.getElementById('pwError');
+        err.classList.add('hidden');
+        if (p1.length < 8) return showErr(err, 'Yeni şifre en az 8 karakter olmalı');
+        if (p1 !== p2) return showErr(err, 'Yeni şifreler eşleşmiyor');
+        try {
+          await api('/api/auth/change-password', { method: 'POST', body: { currentPassword: cur, newPassword: p1 } });
+          toast('Şifre değiştirildi', 'success');
+          document.getElementById('currentPw').value = '';
+          document.getElementById('newPw').value = '';
+          document.getElementById('newPw2').value = '';
+        } catch (e) { showErr(err, e.message); }
+      };
+    }
+    function showErr(el, msg) { el.textContent = msg; el.classList.remove('hidden'); }
+
+    /* ===== Appearance ===== */
+    function renderAppearance(c) {
+      var current = theme.get();
+      c.innerHTML =
+        '<div class="card">' +
+          '<div class="card-header"><h2>Tema</h2><p>Açık, koyu veya cihaz tercihinizi izleyin. Üst menüden de hızlıca değiştirebilirsiniz.</p></div>' +
+          '<div class="card-body">' +
+            '<div style="display:grid; grid-template-columns:repeat(3, 1fr); gap:12px">' +
+              themeCard('light', 'Açık', Icons.sun({ size: 20 }), current === 'light') +
+              themeCard('dark',  'Koyu', Icons.moon({ size: 20 }), current === 'dark') +
+              themeCard('system','Sistem','<span style="display:flex">' + Icons.monitor({ size: 20 }) + '</span>', current === 'system') +
+            '</div>' +
+          '</div>' +
+        '</div>';
+      c.querySelectorAll('[data-theme-card]').forEach(function (card) {
+        card.addEventListener('click', function () {
+          theme.set(card.dataset.themeCard);
+          renderAppearance(c);
+        });
+      });
+    }
+
+    function themeCard(key, label, icon, active) {
+      var preview = key === 'light'
+        ? 'background:#ffffff; color:#0a0a0a; border-color:#e7e5e4'
+        : key === 'dark'
+        ? 'background:#0a0a0a; color:#fafafa; border-color:#262626'
+        : 'background:linear-gradient(135deg,#ffffff 50%,#0a0a0a 50%); color:#6366f1; border-color:var(--border)';
+      return '<button data-theme-card="' + key + '" style="' +
+        'padding:24px 16px; border-radius:var(--radius); border:2px solid ' + (active ? 'var(--brand)' : 'var(--border)') +
+        '; cursor:pointer; display:flex; flex-direction:column; align-items:center; gap:10px; transition:all var(--t); ' + preview + '" >' +
+        '<div style="width:36px; height:36px; border-radius:50%; background:rgba(99,102,241,0.15); color:var(--brand); display:grid; place-items:center">' + icon + '</div>' +
+        '<div style="font-weight:500; font-size:13px; color:inherit">' + label + '</div>' +
+        (active ? '<div class="badge brand">Aktif</div>' : '') +
+      '</button>';
+    }
+
+    /* ===== Tokens ===== */
+    async function renderTokens(c) {
+      c.innerHTML = '<div class="center"><span class="spinner"></span></div>';
+      var tokens = await api('/api/tokens');
+      var status = {};
+      try { status = await api('/api/status'); } catch (e) {}
+      var baseUrl = status.publicUrl || location.origin;
+
+      c.innerHTML =
+        '<div class="card mb-3">' +
+          '<div class="card-header"><h2>API Erişimi</h2><p>AI ajanları ve otomasyonlar için API token oluşturun.</p></div>' +
+          '<div class="card-footer" style="border-top:none; padding-top:0; justify-content:space-between">' +
+            '<a class="btn" href="/api/status" target="_blank">' + Icons.code({ size: 14 }) + ' Durum bilgisi (JSON)</a>' +
+            '<div class="row">' +
+              '<a class="btn" href="https://github.com/benyigiteren/goform#-rest-api" target="_blank" rel="noopener">' + Icons.book({ size: 14 }) + ' API Dökümanı</a>' +
+              '<button class="btn btn-primary" id="newTokenBtn">' + Icons.plus({ size: 14 }) + ' Yeni token</button>' +
+            '</div>' +
+          '</div>' +
+        '</div>' +
+        '<div class="card mb-3">' +
+          '<div class="card-header"><h2>Hızlı başlangıç</h2><p>Token oluşturduktan sonra Bearer header ile kullanın:</p></div>' +
+          '<div class="card-body">' +
+            '<pre class="code-block" style="white-space:pre-wrap">curl ' + esc(baseUrl) + '/api/forms \\\n  -H "Authorization: Bearer gft_..."</pre>' +
+            '<p class="text-small text-muted mt-3">' + Icons.info({ size: 12 }) + ' Yayın URL\'iniz: <code>' + esc(baseUrl) + '</code>' +
+            (status.publicUrl ? '' : ' <span class="text-3">(GOFORM_PUBLIC_URL ayarlanırsa burada görünür)</span>') + '</p>' +
+          '</div>' +
+        '</div>' +
+        '<div class="token-list" id="tokenList"></div>';
+
+      var list = document.getElementById('tokenList');
+      if (tokens.length === 0) {
+        list.innerHTML = '<div class="empty" style="padding:40px 20px"><div class="empty-icon">' + Icons.key({ size: 22 }) + '</div><h3>Token yok</h3><p>API erişimi için bir token oluşturun.</p></div>';
+      } else {
+        list.innerHTML = tokens.map(function (t) {
+          var last = t.lastUsed ? 'Son kullanım: ' + timeAgo(t.lastUsed) : 'Hiç kullanılmadı';
+          return '<div class="token-row">' +
+            '<div style="width:32px; height:32px; border-radius:7px; background:var(--brand-soft); color:var(--brand); display:grid; place-items:center; flex-shrink:0">' + Icons.key({ size: 14 }) + '</div>' +
+            '<div class="info">' +
+              '<div class="name">' + esc(t.name) + '</div>' +
+              '<div class="meta"><code>' + esc(t.prefix) + '…</code> · ' + last + ' · Oluşturuldu ' + timeAgo(t.createdAt) + '</div>' +
+            '</div>' +
+            '<button class="btn btn-ghost btn-icon btn-sm" data-revoke="' + t.id + '" title="İptal et">' + Icons.trash({ size: 14 }) + '</button>' +
+          '</div>';
+        }).join('');
+        list.querySelectorAll('[data-revoke]').forEach(function (b) {
+          b.addEventListener('click', async function () {
+            var ok = await confirmDialog({ title: 'Token iptali', message: 'Bu token kalıcı olarak iptal edilecek. Bu token kullanılan otomasyonlar çalışmayı durduracak.', confirmText: 'İptal et', danger: true });
+            if (!ok) return;
+            await api('/api/tokens/' + b.dataset.revoke, { method: 'DELETE' });
+            toast('Token iptal edildi', 'success');
+            renderTokens(c);
+          });
+        });
+      }
+
+      document.getElementById('newTokenBtn').onclick = function () {
+        modal({
+          title: 'Yeni API token',
+          subtitle: 'Token bir kez gösterilir. Güvenli bir yerde saklayın.',
+          body:
+            '<div class="field">' +
+              '<label class="field-label">Token adı</label>' +
+              '<input class="input" id="tokName" placeholder="ör. Claude AI agent" autofocus>' +
+            '</div>',
+          footer:
+            '<button class="btn" data-modal-close>İptal</button>' +
+            '<button class="btn btn-primary" id="createTokBtn">' + Icons.key({ size: 14 }) + ' Oluştur</button>',
+          onMount: function (el, close) {
+            el.querySelector('#createTokBtn').onclick = async function () {
+              var name = el.querySelector('#tokName').value.trim();
+              if (!name) name = 'API Token';
+              try {
+                var res = await api('/api/tokens', { method: 'POST', body: { name: name } });
+                close();
+                showCreatedToken(res.token);
+              } catch (e) { toast(e.message, 'error'); }
+            };
+          }
+        });
+      };
+    }
+
+    function showCreatedToken(token) {
+      modal({
+        title: 'Token oluşturuldu',
+        subtitle: 'Bu token bir daha gösterilmeyecek. Şimdi kopyalayın.',
+        body:
+          '<div class="code-block" style="font-size:13px">' + esc(token) + '</div>' +
+          '<p class="text-small text-muted mt-3">' + Icons.warning({ size: 12 }) + ' Token gizli kalmalı. Sızması durumunda iptal edin.</p>',
+        footer:
+          '<button class="btn" data-modal-close>Kapat</button>' +
+          '<button class="btn btn-primary" id="cpTok">' + Icons.copy({ size: 14 }) + ' Kopyala</button>',
+        onMount: function (el, close) {
+          el.querySelector('#cpTok').onclick = async function () {
+            await navigator.clipboard.writeText(token);
+            toast('Token kopyalandı', 'success');
+            close();
+            renderSection();
+          };
+        }
+      });
+    }
+
+    /* ===== Users (admin only) ===== */
+    async function renderUsers(c) {
+      if (me.role !== 'admin') {
+        c.innerHTML = '<div class="empty"><h3>Yetkisiz</h3><p>Bu sayfayı yalnızca yöneticiler görebilir.</p></div>';
+        return;
+      }
+      c.innerHTML = '<div class="center"><span class="spinner"></span></div>';
+      var users = await api('/api/users');
+      c.innerHTML =
+        '<div class="card mb-3">' +
+          '<div class="card-header"><h2>Kullanıcılar</h2><p>Yeni kullanıcılar ekleyin veya rolleri değiştirin.</p></div>' +
+          '<div class="card-footer" style="border-top:none; padding-top:0">' +
+            '<button class="btn btn-primary" id="newUserBtn">' + Icons.plus({ size: 14 }) + ' Kullanıcı ekle</button>' +
+          '</div>' +
+        '</div>' +
+        '<div class="user-list">' + users.map(function (u) {
+          var initials = (u.name || u.email).slice(0, 1).toUpperCase();
+          return '<div class="user-row">' +
+            '<div class="user-avatar">' + esc(initials) + '</div>' +
+            '<div class="info">' +
+              '<div class="name">' + esc(u.name) +
+                (u.role === 'admin' ? ' <span class="badge admin">admin</span>' : '') +
+                (u.id === me.id ? ' <span class="badge">siz</span>' : '') +
+              '</div>' +
+              '<div class="email">' + esc(u.email) + ' · Katıldı ' + timeAgo(u.createdAt) + '</div>' +
+            '</div>' +
+            '<button class="btn btn-ghost btn-icon btn-sm" data-edit-user="' + u.id + '" title="Düzenle">' + Icons.edit({ size: 14 }) + '</button>' +
+            '<button class="btn btn-ghost btn-icon btn-sm" data-reset-pw="' + u.id + '" title="Şifre sıfırla">' + Icons.key({ size: 14 }) + '</button>' +
+            (u.id !== me.id ? '<button class="btn btn-ghost btn-icon btn-sm" data-del-user="' + u.id + '" title="Sil">' + Icons.trash({ size: 14 }) + '</button>' : '') +
+          '</div>';
+        }).join('') + '</div>';
+
+      c.querySelectorAll('[data-edit-user]').forEach(function (b) {
+        b.addEventListener('click', function () {
+          var u = users.find(function (x) { return x.id == b.dataset.editUser; });
+          showEditUserModal(u);
+        });
+      });
+      c.querySelectorAll('[data-reset-pw]').forEach(function (b) {
+        b.addEventListener('click', function () {
+          var u = users.find(function (x) { return x.id == b.dataset.resetPw; });
+          showResetPwModal(u);
+        });
+      });
+      c.querySelectorAll('[data-del-user]').forEach(function (b) {
+        b.addEventListener('click', async function () {
+          var u = users.find(function (x) { return x.id == b.dataset.delUser; });
+          var ok = await confirmDialog({
+            title: 'Kullanıcı silinsin mi?',
+            message: u.name + ' (' + u.email + ') ve sahip olduğu tüm formlar kalıcı olarak silinecek.',
+            confirmText: 'Sil', danger: true
+          });
+          if (!ok) return;
+          try {
+            await api('/api/users/' + u.id, { method: 'DELETE' });
+            toast('Kullanıcı silindi', 'success');
+            renderUsers(c);
+          } catch (e) { toast(e.message, 'error'); }
+        });
+      });
+      document.getElementById('newUserBtn').onclick = function () { showCreateUserModal(c); };
+    }
+
+    function showCreateUserModal(c) {
+      modal({
+        title: 'Yeni kullanıcı',
+        subtitle: 'Yeni kullanıcıya başlangıç şifresi belirleyin. Sonra kendileri değiştirebilir.',
+        body:
+          '<div class="field"><label class="field-label">Ad Soyad</label><input class="input" id="nuName" autofocus></div>' +
+          '<div class="field"><label class="field-label">E-posta</label><input type="email" class="input" id="nuEmail"></div>' +
+          '<div class="field"><label class="field-label">Başlangıç şifresi</label>' +
+            passwordField('nuPw', { placeholder: 'En az 8 karakter', minlength: 8 }) +
+          '</div>' +
+          '<div class="field">' +
+            '<label class="toggle-row" style="border:1px solid var(--border); border-radius:var(--radius-sm); padding:12px">' +
+              '<div class="toggle-text"><div class="toggle-label">Yönetici (admin)</div><div class="toggle-desc">Tüm formları yönetir ve kullanıcı ekler</div></div>' +
+              '<input type="checkbox" id="nuAdmin"><span class="toggle-switch"></span>' +
+            '</label>' +
+          '</div>' +
+          '<div id="nuErr" class="field-error hidden"></div>',
+        footer:
+          '<button class="btn" data-modal-close>İptal</button>' +
+          '<button class="btn btn-primary" id="createUserBtn">' + Icons.user({ size: 14 }) + ' Oluştur</button>',
+        onMount: function (el, close) {
+          el.querySelector('#createUserBtn').onclick = async function () {
+            var err = el.querySelector('#nuErr');
+            err.classList.add('hidden');
+            try {
+              await api('/api/users', { method: 'POST', body: {
+                name: el.querySelector('#nuName').value.trim(),
+                email: el.querySelector('#nuEmail').value.trim(),
+                password: el.querySelector('#nuPw').value,
+                role: el.querySelector('#nuAdmin').checked ? 'admin' : 'user',
+              }});
+              toast('Kullanıcı oluşturuldu', 'success');
+              close();
+              renderUsers(c);
+            } catch (e) { err.textContent = e.message; err.classList.remove('hidden'); }
+          };
+        }
+      });
+    }
+
+    function showEditUserModal(u) {
+      modal({
+        title: 'Kullanıcıyı düzenle',
+        body:
+          '<div class="field"><label class="field-label">Ad Soyad</label><input class="input" id="euName" value="' + esc(u.name) + '"></div>' +
+          '<div class="field"><label class="field-label">E-posta</label><input class="input" value="' + esc(u.email) + '" disabled></div>' +
+          '<div class="field">' +
+            '<label class="toggle-row" style="border:1px solid var(--border); border-radius:var(--radius-sm); padding:12px">' +
+              '<div class="toggle-text"><div class="toggle-label">Yönetici (admin)</div></div>' +
+              '<input type="checkbox" id="euAdmin"' + (u.role === 'admin' ? ' checked' : '') + '><span class="toggle-switch"></span>' +
+            '</label>' +
+          '</div>',
+        footer:
+          '<button class="btn" data-modal-close>İptal</button>' +
+          '<button class="btn btn-primary" id="saveBtn">' + Icons.save({ size: 14 }) + ' Kaydet</button>',
+        onMount: function (el, close) {
+          el.querySelector('#saveBtn').onclick = async function () {
+            try {
+              await api('/api/users/' + u.id, { method: 'PUT', body: {
+                name: el.querySelector('#euName').value.trim(),
+                role: el.querySelector('#euAdmin').checked ? 'admin' : 'user',
+              }});
+              toast('Kullanıcı güncellendi', 'success');
+              close();
+              renderUsers(document.getElementById('content'));
+            } catch (e) { toast(e.message, 'error'); }
+          };
+        }
+      });
+    }
+
+    function showResetPwModal(u) {
+      modal({
+        title: 'Şifre sıfırla',
+        subtitle: u.email + ' için yeni şifre belirleyin',
+        body:
+          '<div class="field"><label class="field-label">Yeni şifre</label>' +
+            passwordField('rpPw', { placeholder: 'En az 8 karakter', minlength: 8, autofocus: true }) +
+          '</div>',
+        footer:
+          '<button class="btn" data-modal-close>İptal</button>' +
+          '<button class="btn btn-primary" id="rpBtn">' + Icons.key({ size: 14 }) + ' Sıfırla</button>',
+        onMount: function (el, close) {
+          el.querySelector('#rpBtn').onclick = async function () {
+            try {
+              await api('/api/users/' + u.id + '/reset-password', { method: 'POST', body: { password: el.querySelector('#rpPw').value } });
+              toast('Şifre sıfırlandı', 'success');
+              close();
+            } catch (e) { toast(e.message, 'error'); }
+          };
+        }
+      });
+    }
+
+    /* ===== About ===== */
+    async function renderAbout(c) {
+      var status = {};
+      try { status = await api('/api/status'); } catch (e) {}
+      var baseUrl = status.publicUrl || location.origin;
+      c.innerHTML =
+        '<div class="card mb-3">' +
+          '<div class="card-header"><h2>Hakkında</h2></div>' +
+          '<div class="card-body">' +
+            '<div class="flex gap-3 mb-3">' +
+              '<img src="/static/img/logo.svg" style="width:40px; height:40px; border-radius:9px">' +
+              '<div><div style="font-weight:600; font-size:16px">goform</div><div class="text-muted text-small">v' + esc(status.version || '1.0.0') + '</div></div>' +
+            '</div>' +
+            '<p class="text-muted" style="line-height:1.6">Sürükle bırak formlar, paylaşılabilir bağlantılar, AI ajanları için API. Go ile minimal RAM kullanımı ve tek dosya dağıtımı.</p>' +
+          '</div>' +
+          '<div class="card-footer" style="justify-content:flex-start; gap:6px; flex-wrap:wrap">' +
+            '<a class="btn" href="https://github.com/benyigiteren/goform" target="_blank" rel="noopener">' + Icons.github({ size: 14 }) + ' GitHub</a>' +
+            '<a class="btn" href="https://github.com/benyigiteren/goform#readme" target="_blank" rel="noopener">' + Icons.book({ size: 14 }) + ' Dokümantasyon</a>' +
+            '<a class="btn" href="/api/status" target="_blank">' + Icons.code({ size: 14 }) + ' /api/status</a>' +
+          '</div>' +
+        '</div>' +
+        '<div class="card">' +
+          '<div class="card-header"><h2>API uç noktaları</h2><p>Yayın adresi: <code>' + esc(baseUrl) + '</code> · Auth: <code>Authorization: Bearer &lt;token&gt;</code> veya çerez.</p></div>' +
+          '<div class="card-body">' +
+            '<pre class="code-block" style="white-space:pre-wrap; line-height:1.7">' +
+'POST   /api/auth/login                   ' + 'Giriş\n' +
+'POST   /api/auth/logout                  ' + 'Çıkış\n' +
+'GET    /api/auth/me                      ' + 'Mevcut kullanıcı\n' +
+'POST   /api/auth/change-password         ' + 'Şifre değiştir\n' +
+'\n' +
+'GET    /api/forms                        ' + 'Form listesi (?scope=all admin)\n' +
+'POST   /api/forms                        ' + 'Form oluştur\n' +
+'GET    /api/forms/:id                    ' + 'Form detayı\n' +
+'PUT    /api/forms/:id                    ' + 'Form güncelle\n' +
+'DELETE /api/forms/:id                    ' + 'Form sil\n' +
+'\n' +
+'GET    /api/forms/:id/notifications      ' + 'Bildirim ayarları\n' +
+'PUT    /api/forms/:id/notifications      ' + 'Bildirimleri güncelle\n' +
+'POST   /api/forms/:id/notifications/test ' + 'Test bildirimi gönder\n' +
+'\n' +
+'GET    /api/public/forms/:id             ' + 'Herkese açık form\n' +
+'POST   /api/public/forms/:id/responses   ' + 'Yanıt gönder\n' +
+'\n' +
+'GET    /api/forms/:id/responses          ' + 'Yanıtlar\n' +
+'DELETE /api/responses/:id                ' + 'Yanıt sil\n' +
+'\n' +
+'GET    /api/tokens                       ' + 'Token listesi\n' +
+'POST   /api/tokens                       ' + 'Yeni token\n' +
+'DELETE /api/tokens/:id                   ' + 'Token iptal\n' +
+'\n' +
+'GET    /api/users                        ' + 'Kullanıcılar (admin)\n' +
+'POST   /api/users                        ' + 'Kullanıcı oluştur (admin)\n' +
+'PUT    /api/users/:id                    ' + 'Kullanıcı güncelle (admin)\n' +
+'POST   /api/users/:id/reset-password     ' + 'Şifre sıfırla (admin)\n' +
+'DELETE /api/users/:id                    ' + 'Kullanıcı sil (admin)' +
+            '</pre>' +
+          '</div>' +
+        '</div>';
+    }
+
+    init();
+  </script>
+</body>
+</html>

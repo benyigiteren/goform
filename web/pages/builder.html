@@ -1,0 +1,861 @@
+<!doctype html>
+<html lang="tr">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Form Düzenle — goform</title>
+  <link rel="icon" type="image/svg+xml" href="/static/img/favicon.svg">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/static/css/style.css">
+</head>
+<body>
+  <div class="mobile-toolbar">
+    <button class="btn btn-icon" id="mobSidebar" title="Alanlar"></button>
+    <div class="flex-1"></div>
+    <button class="btn btn-icon" id="mobInspector" title="Ayarlar"></button>
+  </div>
+
+  <div class="builder">
+    <!-- Left: field palette -->
+    <aside class="builder-sidebar" id="sidebar">
+      <div class="section-label">Alan türleri</div>
+      <div id="fieldPalette"></div>
+      <div class="section-label mt-4">İpucu</div>
+      <div style="padding:8px 12px; font-size:12px; color:var(--text-2); line-height:1.6">
+        Sürükleyip canvas'a bırakın veya tıklayarak sona ekleyin. Düzenlemek için karta tıklayın.
+      </div>
+    </aside>
+
+    <!-- Center: canvas -->
+    <section class="builder-canvas" id="canvas">
+      <div class="form-container">
+        <div class="form-meta">
+          <input class="form-meta-title" id="formTitle" placeholder="Form başlığı">
+          <textarea class="form-meta-desc" id="formDesc" placeholder="Form açıklaması (isteğe bağlı)" rows="1"></textarea>
+        </div>
+        <div id="fieldsList"></div>
+        <div id="emptyHint" style="text-align:center; padding:32px; border:1.5px dashed var(--border-strong); border-radius:var(--radius); color:var(--text-3); font-size:13px">
+          Soldan bir alan sürükleyin veya tıklayarak ekleyin.
+        </div>
+      </div>
+    </section>
+
+    <!-- Right: inspector -->
+    <aside class="builder-inspector" id="inspectorWrap">
+      <div id="inspector">
+        <div class="inspector-empty">
+          <div id="inspIcon"></div>
+          <div>Düzenlemek için bir soruya tıklayın</div>
+        </div>
+      </div>
+    </aside>
+  </div>
+
+  <script src="/static/js/icons.js"></script>
+  <script src="/static/js/common.js"></script>
+  <script src="/static/js/fields.js"></script>
+  <script src="/static/js/templates.js"></script>
+  <script>
+    var formId = location.pathname.split('/').pop();
+    var state = { title: '', description: '', fields: [], accepting: true, theme: { color: 'indigo', icon: '', mode: 'light' }, maxResponses: null, closedMessage: '' };
+    var selectedFieldId = null;
+    var saveTimer = null;
+    var me = null;
+
+    document.getElementById('inspIcon').innerHTML = Icons.settings({ size: 32 });
+
+    async function init() {
+      try {
+        me = await api('/api/auth/me');
+      } catch (e) { location.href = '/login'; return; }
+
+      renderNav({
+        user: me,
+        center: '<span id="saveStatus" class="text-muted text-small" style="margin-left:8px"></span>',
+        actions:
+          '<label class="toggle-row" style="padding:0; gap:8px; cursor:pointer">' +
+            '<input type="checkbox" id="acceptingToggle">' +
+            '<span class="toggle-switch"></span>' +
+            '<span class="text-small hide-sm">Aktif</span>' +
+          '</label>' +
+          '<div class="nav-divider"></div>' +
+          '<button class="btn btn-icon btn-ghost" id="themeBtn" title="Form görünümü">' + Icons.sparkles({ size: 14 }) + '</button>' +
+          '<button class="btn btn-icon btn-ghost" id="notifBtn" title="Bildirimler">' + Icons.bell({ size: 14 }) + '</button>' +
+          '<button class="btn btn-icon btn-ghost" id="previewBtn" title="Önizle">' + Icons.eye({ size: 14 }) + '</button>' +
+          '<button class="btn" id="responsesBtn">' + Icons.chart({ size: 14 }) + ' <span class="hide-sm">Yanıtlar</span> <span id="respCount" class="badge" style="margin-left:4px">0</span></button>' +
+          '<button class="btn btn-primary" id="shareBtn">' + Icons.share({ size: 14 }) + ' Paylaş</button>'
+      });
+
+      document.getElementById('previewBtn').onclick = function () { window.open('/f/' + formId, '_blank'); };
+      document.getElementById('responsesBtn').onclick = function () { location.href = '/responses/' + formId; };
+      document.getElementById('shareBtn').onclick = showShareModal;
+      document.getElementById('themeBtn').onclick = showThemeModal;
+      document.getElementById('notifBtn').onclick = showNotificationsModal;
+      document.getElementById('acceptingToggle').addEventListener('change', function (e) {
+        state.accepting = e.target.checked;
+        scheduleSave();
+        toast(state.accepting ? 'Form yanıt almaya açık' : 'Form yanıtları durduruldu', 'success');
+      });
+
+      renderPalette();
+      await loadForm();
+      loadResponseCount();
+
+      // Mobile toolbar
+      var mobSb = document.getElementById('mobSidebar');
+      var mobIn = document.getElementById('mobInspector');
+      if (mobSb) {
+        mobSb.innerHTML = Icons.layers({ size: 16 });
+        mobSb.addEventListener('click', function () {
+          document.getElementById('sidebar').classList.toggle('open');
+        });
+      }
+      if (mobIn) {
+        mobIn.innerHTML = Icons.settings({ size: 16 });
+        mobIn.addEventListener('click', function () {
+          document.getElementById('inspectorWrap').classList.toggle('open');
+        });
+      }
+    }
+
+    function renderPalette() {
+      var palette = document.getElementById('fieldPalette');
+      var grouped = {};
+      FieldTypes.forEach(function (ft) { (grouped[ft.group] = grouped[ft.group] || []).push(ft); });
+      var html = '';
+      var first = true;
+      for (var group in grouped) {
+        if (!first) html += '<div class="section-label mt-3">' + group + '</div>';
+        else html += '<div class="section-label mt-2">' + group + '</div>';
+        first = false;
+        grouped[group].forEach(function (ft) {
+          html += '<div class="field-type" draggable="true" data-fieldtype="' + ft.type + '">' +
+            '<div class="ic-wrap">' + Icons[ft.icon]({ size: 15 }) + '</div>' +
+            '<div>' + ft.label + '</div>' +
+          '</div>';
+        });
+      }
+      palette.innerHTML = html;
+      palette.querySelectorAll('.field-type').forEach(function (el) {
+        el.addEventListener('click', function () { addField(el.dataset.fieldtype); });
+        el.addEventListener('dragstart', function (e) {
+          e.dataTransfer.setData('newfield', el.dataset.fieldtype);
+          e.dataTransfer.effectAllowed = 'copy';
+        });
+      });
+    }
+
+    async function loadForm() {
+      var data = await api('/api/forms/' + formId);
+      state.title = data.title;
+      state.description = data.description || '';
+      state.fields = data.fields || [];
+      state.accepting = data.accepting;
+      state.theme = data.theme && Object.keys(data.theme).length ? data.theme : { color: 'indigo', icon: '', mode: 'light' };
+      if (!state.theme.mode) state.theme.mode = 'light';
+      state.maxResponses = data.maxResponses || null;
+      state.closedMessage = data.closedMessage || '';
+      document.getElementById('formTitle').value = state.title;
+      document.getElementById('formDesc').value = state.description;
+      document.getElementById('acceptingToggle').checked = state.accepting;
+      autoResize(document.getElementById('formDesc'));
+      applyTheme();
+      renderFields();
+    }
+
+    function applyTheme() {
+      var grad = formThemeGradient(state.theme.color || 'indigo');
+      document.documentElement.style.setProperty('--form-gradient', grad);
+      var iconBadge = document.getElementById('formIconBadge');
+      if (state.theme.icon) {
+        if (!iconBadge) {
+          var meta = document.querySelector('.form-meta');
+          if (meta) meta.insertAdjacentHTML('afterbegin', '<div class="form-icon-badge" id="formIconBadge"></div>');
+          iconBadge = document.getElementById('formIconBadge');
+        }
+        if (iconBadge) iconBadge.textContent = state.theme.icon;
+      } else if (iconBadge) {
+        iconBadge.remove();
+      }
+      // Apply gradient to form-meta top stripe via CSS variable
+      var meta = document.querySelector('.form-meta');
+      if (meta) {
+        meta.style.borderTop = 'none';
+        meta.classList.add('form-themed');
+      }
+    }
+
+    async function loadResponseCount() {
+      try {
+        var list = await api('/api/forms/' + formId + '/responses');
+        var el = document.getElementById('respCount');
+        if (state.maxResponses) {
+          el.textContent = list.length + ' / ' + state.maxResponses;
+          el.classList.toggle('paused', list.length >= state.maxResponses);
+        } else {
+          el.textContent = list.length;
+        }
+      } catch (e) {}
+    }
+
+    function setSaveStatus(text, clearAfter) {
+      var el = document.getElementById('saveStatus');
+      if (!el) return;
+      el.textContent = text;
+      if (clearAfter) setTimeout(function () { if (el.textContent === text) el.textContent = ''; }, clearAfter);
+    }
+
+    function scheduleSave() {
+      clearTimeout(saveTimer);
+      setSaveStatus('Yazılıyor...');
+      saveTimer = setTimeout(saveForm, 600);
+    }
+
+    async function saveForm() {
+      setSaveStatus('Kaydediliyor...');
+      try {
+        await api('/api/forms/' + formId, {
+          method: 'PUT',
+          body: {
+            title: state.title,
+            description: state.description,
+            fields: state.fields,
+            theme: state.theme,
+            accepting: state.accepting,
+            maxResponses: state.maxResponses,
+            closedMessage: state.closedMessage,
+          }
+        });
+        setSaveStatus('Kaydedildi', 1500);
+      } catch (e) {
+        setSaveStatus('Kayıt başarısız', 3000);
+      }
+    }
+
+    function renderFields() {
+      var wrap = document.getElementById('fieldsList');
+      document.getElementById('emptyHint').style.display = state.fields.length === 0 ? '' : 'none';
+      wrap.innerHTML = state.fields.map(function (f, idx) { return renderFieldCard(f, idx); }).join('');
+      attachFieldEvents();
+      renderInspector();
+    }
+
+    function renderFieldCard(f, idx) {
+      var isSection = f.type === 'section';
+      var html =
+        '<div class="drop-indicator" data-drop-idx="' + idx + '"></div>' +
+        '<div class="field-item ' + (selectedFieldId === f.id ? 'selected' : '') + '" data-id="' + f.id + '" data-idx="' + idx + '" draggable="true">' +
+          '<div class="drag-handle">' + Icons.drag({ size: 14 }) + '</div>' +
+          '<div class="field-header">' +
+            '<input class="field-label-input" data-edit="label" value="' + esc(f.label) + '" placeholder="' + (isSection ? 'Bölüm başlığı' : 'Soru yazın') + '">' +
+            '<div class="field-actions">' +
+              '<button class="btn btn-ghost btn-icon btn-sm" data-act="duplicate" title="Çoğalt">' + Icons.copy({ size: 14 }) + '</button>' +
+              '<button class="btn btn-ghost btn-icon btn-sm" data-act="delete" title="Sil">' + Icons.trash({ size: 14 }) + '</button>' +
+            '</div>' +
+          '</div>';
+      if (f.description || isSection) {
+        html += '<textarea class="field-description-input" data-edit="description" rows="1" placeholder="Açıklama (isteğe bağlı)">' + esc(f.description || '') + '</textarea>';
+      }
+      html += '<div class="field-preview">' + renderFieldPreview(f) + '</div>';
+      if (f.required) {
+        html += '<div class="text-small text-muted mt-2">* Zorunlu alan</div>';
+      }
+      html += '</div>';
+      if (idx === state.fields.length - 1) {
+        html += '<div class="drop-indicator" data-drop-idx="' + (idx + 1) + '"></div>';
+      }
+      return html;
+    }
+
+    function attachFieldEvents() {
+      document.querySelectorAll('.field-item').forEach(function (item) {
+        attachCardEvents(item);
+      });
+    }
+
+    function attachCardEvents(item) {
+      item.addEventListener('click', function (e) {
+        if (e.target.closest('[data-act]') || e.target.matches('input, textarea')) return;
+        selectField(item.dataset.id);
+      });
+      var descEl = item.querySelector('[data-edit="description"]');
+      if (descEl) {
+        autoResize(descEl);
+        descEl.addEventListener('input', function () { autoResize(descEl); });
+      }
+      item.querySelectorAll('[data-act]').forEach(function (btn) {
+        btn.addEventListener('click', function (e) {
+          e.stopPropagation();
+          var id = item.dataset.id;
+          var act = btn.dataset.act;
+          if (act === 'delete') deleteField(id);
+          else if (act === 'duplicate') duplicateField(id);
+        });
+      });
+      item.querySelectorAll('[data-edit]').forEach(function (input) {
+        input.addEventListener('input', function () {
+          var id = item.dataset.id;
+          var field = state.fields.find(function (f) { return f.id === id; });
+          if (!field) return;
+          field[input.dataset.edit] = input.value;
+          scheduleSave();
+          if (selectedFieldId === id) {
+            var inspInput = document.querySelector('#inspector [data-ins="' + input.dataset.edit + '"]');
+            if (inspInput && document.activeElement !== inspInput) inspInput.value = input.value;
+          }
+        });
+      });
+      item.addEventListener('dragstart', function (e) {
+        if (e.target.matches('input, textarea')) { e.preventDefault(); return; }
+        e.dataTransfer.setData('moveidx', item.dataset.idx);
+        e.dataTransfer.effectAllowed = 'move';
+        item.classList.add('dragging');
+      });
+      item.addEventListener('dragend', function () {
+        item.classList.remove('dragging');
+        document.querySelectorAll('.drop-indicator').forEach(function (d) { d.classList.remove('active'); });
+      });
+    }
+
+    function autoResize(el) {
+      el.style.height = 'auto';
+      el.style.height = el.scrollHeight + 'px';
+    }
+
+    function selectField(id) {
+      selectedFieldId = id;
+      document.querySelectorAll('.field-item').forEach(function (item) {
+        item.classList.toggle('selected', item.dataset.id === id);
+      });
+      renderInspector();
+      if (window.innerWidth <= 800) {
+        document.getElementById('inspectorWrap').classList.add('open');
+      }
+    }
+
+    function renderInspector() {
+      var wrap = document.getElementById('inspector');
+      if (!selectedFieldId) {
+        wrap.innerHTML = '<div class="inspector-empty">' + Icons.settings({ size: 32 }) +
+          '<div class="mt-3">Düzenlemek için bir soruya tıklayın</div></div>';
+        return;
+      }
+      var field = state.fields.find(function (f) { return f.id === selectedFieldId; });
+      if (!field) { selectedFieldId = null; renderInspector(); return; }
+      var meta = FieldTypes.find(function (ft) { return ft.type === field.type; });
+
+      var html =
+        '<div class="section-label">' + (meta ? meta.label : field.type) + ' ayarları</div>' +
+        '<div class="insp-group">' +
+          '<label class="insp-label">Soru metni</label>' +
+          '<input class="insp-input" data-ins="label" value="' + esc(field.label) + '">' +
+        '</div>' +
+        '<div class="insp-group">' +
+          '<label class="insp-label">Açıklama (isteğe bağlı)</label>' +
+          '<textarea class="insp-input" data-ins="description" rows="2">' + esc(field.description || '') + '</textarea>' +
+        '</div>';
+
+      if (['radio', 'checkbox', 'dropdown'].indexOf(field.type) >= 0) {
+        html += '<div class="insp-divider"></div><div class="section-label">Seçenekler</div><div class="insp-group">';
+        (field.options || []).forEach(function (opt, i) {
+          html += '<div class="choice-row">' +
+            '<div class="choice-marker' + (field.type === 'checkbox' ? ' checkbox' : '') + '"></div>' +
+            '<input type="text" value="' + esc(opt) + '" data-opt-idx="' + i + '" placeholder="Seçenek ' + (i + 1) + '">' +
+            '<button class="remove" data-remove-opt="' + i + '">' + Icons.x({ size: 12 }) + '</button>' +
+          '</div>';
+        });
+        html += '<button class="add-choice" id="addOption">' +
+          '<div class="choice-marker' + (field.type === 'checkbox' ? ' checkbox' : '') + '"></div>' +
+          '<span>Seçenek ekle</span></button></div>';
+      }
+
+      if (field.type === 'rating') {
+        html += '<div class="insp-divider"></div>' +
+          '<div class="insp-group">' +
+            '<label class="insp-label">Maksimum yıldız: <span id="maxStarsLbl">' + (field.maxStars || 5) + '</span></label>' +
+            '<input type="range" min="3" max="10" value="' + (field.maxStars || 5) + '" class="insp-input" data-ins="maxStars" data-num="1">' +
+          '</div>';
+      }
+      if (field.type === 'scale') {
+        html += '<div class="insp-divider"></div>' +
+          '<div class="insp-group"><label class="insp-label">En düşük değer</label><input type="number" class="insp-input" value="' + (field.min == null ? 1 : field.min) + '" data-ins="min" data-num="1"></div>' +
+          '<div class="insp-group"><label class="insp-label">En yüksek değer</label><input type="number" class="insp-input" value="' + (field.max == null ? 10 : field.max) + '" data-ins="max" data-num="1"></div>' +
+          '<div class="insp-group"><label class="insp-label">En düşük etiketi</label><input class="insp-input" value="' + esc(field.minLabel || '') + '" data-ins="minLabel" placeholder="ör. Memnun değilim"></div>' +
+          '<div class="insp-group"><label class="insp-label">En yüksek etiketi</label><input class="insp-input" value="' + esc(field.maxLabel || '') + '" data-ins="maxLabel" placeholder="ör. Çok memnunum"></div>';
+      }
+      if (field.type === 'number') {
+        html += '<div class="insp-divider"></div>' +
+          '<div class="insp-group"><label class="insp-label">Minimum (isteğe bağlı)</label><input type="number" class="insp-input" value="' + (field.min == null ? '' : field.min) + '" data-ins="min" data-num="empty"></div>' +
+          '<div class="insp-group"><label class="insp-label">Maksimum (isteğe bağlı)</label><input type="number" class="insp-input" value="' + (field.max == null ? '' : field.max) + '" data-ins="max" data-num="empty"></div>';
+      }
+      if (['short_text', 'long_text', 'number', 'email', 'url', 'phone'].indexOf(field.type) >= 0) {
+        html += '<div class="insp-divider"></div>' +
+          '<div class="insp-group">' +
+            '<label class="insp-label">Yer tutucu metin</label>' +
+            '<input class="insp-input" value="' + esc(field.placeholder || '') + '" data-ins="placeholder">' +
+          '</div>';
+      }
+      if (field.type !== 'section') {
+        html += '<div class="insp-divider"></div>' +
+          '<label class="toggle-row">' +
+            '<div class="toggle-text">' +
+              '<div class="toggle-label">Zorunlu alan</div>' +
+              '<div class="toggle-desc">Yanıtsız bırakılamaz</div>' +
+            '</div>' +
+            '<input type="checkbox" data-ins="required"' + (field.required ? ' checked' : '') + '>' +
+            '<span class="toggle-switch"></span>' +
+          '</label>';
+      }
+      html += '<div class="insp-divider"></div>' +
+        '<button class="btn btn-danger btn-block" id="deleteFieldBtn">' + Icons.trash({ size: 14 }) + ' Soruyu sil</button>';
+
+      wrap.innerHTML = html;
+      attachInspectorEvents(field);
+    }
+
+    function attachInspectorEvents(field) {
+      var wrap = document.getElementById('inspector');
+
+      wrap.querySelectorAll('[data-ins]').forEach(function (input) {
+        var key = input.dataset.ins;
+        function handler() {
+          var val;
+          if (input.type === 'checkbox') val = input.checked;
+          else if (input.dataset.num === '1') val = Number(input.value);
+          else if (input.dataset.num === 'empty') val = input.value === '' ? null : Number(input.value);
+          else val = input.value;
+          field[key] = val;
+          scheduleSave();
+          updateFieldCard(field);
+          if (key === 'maxStars') {
+            var l = document.getElementById('maxStarsLbl');
+            if (l) l.textContent = val;
+          }
+          if (key === 'label') {
+            var labelInput = document.querySelector('.field-item[data-id="' + field.id + '"] [data-edit="label"]');
+            if (labelInput && document.activeElement !== labelInput) labelInput.value = val;
+          }
+          if (key === 'description') {
+            var descInput = document.querySelector('.field-item[data-id="' + field.id + '"] [data-edit="description"]');
+            if (descInput && document.activeElement !== descInput) descInput.value = val;
+          }
+        }
+        input.addEventListener('input', handler);
+        if (input.type === 'checkbox') input.addEventListener('change', handler);
+      });
+
+      wrap.querySelectorAll('[data-opt-idx]').forEach(function (input) {
+        input.addEventListener('input', function () {
+          var idx = Number(input.dataset.optIdx);
+          field.options[idx] = input.value;
+          scheduleSave();
+          updateFieldCard(field);
+        });
+      });
+      wrap.querySelectorAll('[data-remove-opt]').forEach(function (btn) {
+        btn.addEventListener('click', function (e) {
+          e.preventDefault();
+          field.options.splice(Number(btn.dataset.removeOpt), 1);
+          scheduleSave();
+          updateFieldCard(field);
+          renderInspector();
+        });
+      });
+      var addOpt = wrap.querySelector('#addOption');
+      if (addOpt) addOpt.addEventListener('click', function () {
+        field.options.push('Seçenek ' + (field.options.length + 1));
+        scheduleSave();
+        updateFieldCard(field);
+        renderInspector();
+        setTimeout(function () {
+          var inputs = document.querySelectorAll('[data-opt-idx]');
+          inputs[inputs.length - 1] && inputs[inputs.length - 1].focus();
+        }, 0);
+      });
+      var delBtn = wrap.querySelector('#deleteFieldBtn');
+      if (delBtn) delBtn.addEventListener('click', function () { deleteField(field.id); });
+    }
+
+    function updateFieldCard(field) {
+      var card = document.querySelector('.field-item[data-id="' + field.id + '"]');
+      if (!card) return;
+      var idx = state.fields.findIndex(function (f) { return f.id === field.id; });
+      var wrapper = document.createElement('div');
+      wrapper.innerHTML = renderFieldCard(field, idx);
+      var newCard = wrapper.querySelector('.field-item');
+      if (newCard) {
+        card.replaceWith(newCard);
+        attachCardEvents(newCard);
+      }
+    }
+
+    function addField(type, atIndex) {
+      var field = createField(type);
+      if (atIndex == null) state.fields.push(field);
+      else state.fields.splice(atIndex, 0, field);
+      selectedFieldId = field.id;
+      scheduleSave();
+      renderFields();
+      setTimeout(function () {
+        var el = document.querySelector('.field-item[data-id="' + field.id + '"]');
+        if (el) {
+          el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+          el.querySelector('.field-label-input').focus();
+        }
+      }, 50);
+    }
+
+    function deleteField(id) {
+      state.fields = state.fields.filter(function (f) { return f.id !== id; });
+      if (selectedFieldId === id) selectedFieldId = null;
+      scheduleSave();
+      renderFields();
+    }
+
+    function duplicateField(id) {
+      var idx = state.fields.findIndex(function (f) { return f.id === id; });
+      if (idx < 0) return;
+      var copy = JSON.parse(JSON.stringify(state.fields[idx]));
+      copy.id = 'f_' + Math.random().toString(36).slice(2, 10);
+      copy.label = (state.fields[idx].label || '') + ' (kopya)';
+      state.fields.splice(idx + 1, 0, copy);
+      selectedFieldId = copy.id;
+      scheduleSave();
+      renderFields();
+    }
+
+    function moveField(fromIdx, toIdx) {
+      var item = state.fields.splice(fromIdx, 1)[0];
+      var adjusted = toIdx > fromIdx ? toIdx - 1 : toIdx;
+      state.fields.splice(adjusted, 0, item);
+      scheduleSave();
+      renderFields();
+    }
+
+    // Canvas drag and drop zone
+    var canvas = document.getElementById('canvas');
+    var fieldsList = document.getElementById('fieldsList');
+
+    fieldsList.addEventListener('dragover', function (e) {
+      e.preventDefault();
+      document.querySelectorAll('.drop-indicator').forEach(function (i) { i.classList.remove('active'); });
+      var y = e.clientY;
+      var items = Array.from(document.querySelectorAll('.field-item'));
+      var targetIdx = state.fields.length;
+      for (var i = 0; i < items.length; i++) {
+        var r = items[i].getBoundingClientRect();
+        if (y < r.top + r.height / 2) { targetIdx = i; break; }
+      }
+      var ind = document.querySelector('.drop-indicator[data-drop-idx="' + targetIdx + '"]');
+      if (ind) ind.classList.add('active');
+      e.dataTransfer.dropEffect = e.dataTransfer.types.includes('newfield') ? 'copy' : 'move';
+    });
+    fieldsList.addEventListener('dragleave', function (e) {
+      if (!fieldsList.contains(e.relatedTarget)) {
+        document.querySelectorAll('.drop-indicator').forEach(function (i) { i.classList.remove('active'); });
+      }
+    });
+    fieldsList.addEventListener('drop', function (e) {
+      e.preventDefault();
+      var active = document.querySelector('.drop-indicator.active');
+      var targetIdx = active ? Number(active.dataset.dropIdx) : state.fields.length;
+      document.querySelectorAll('.drop-indicator').forEach(function (i) { i.classList.remove('active'); });
+      var newType = e.dataTransfer.getData('newfield');
+      var moveIdx = e.dataTransfer.getData('moveidx');
+      if (newType) addField(newType, targetIdx);
+      else if (moveIdx !== '') moveField(Number(moveIdx), targetIdx);
+    });
+
+    var emptyHint = document.getElementById('emptyHint');
+    emptyHint.addEventListener('dragover', function (e) {
+      e.preventDefault();
+      e.dataTransfer.dropEffect = 'copy';
+      emptyHint.style.borderColor = 'var(--brand)';
+    });
+    emptyHint.addEventListener('dragleave', function () { emptyHint.style.borderColor = ''; });
+    emptyHint.addEventListener('drop', function (e) {
+      e.preventDefault();
+      emptyHint.style.borderColor = '';
+      var t = e.dataTransfer.getData('newfield');
+      if (t) addField(t);
+    });
+
+    // Header inputs
+    document.getElementById('formTitle').addEventListener('input', function (e) {
+      state.title = e.target.value;
+      scheduleSave();
+    });
+    document.getElementById('formDesc').addEventListener('input', function (e) {
+      state.description = e.target.value;
+      autoResize(e.target);
+      scheduleSave();
+    });
+
+    async function showShareModal() {
+      var status = {};
+      try { status = await api('/api/status'); } catch (e) {}
+      var base = status.publicUrl || location.origin;
+      var url = base + '/f/' + formId;
+      modal({
+        title: 'Formu paylaş',
+        subtitle: 'Bu bağlantıya sahip herkes formu doldurabilir.',
+        body: '<div class="code-block">' + esc(url) + '</div>',
+        footer:
+          '<button class="btn" data-modal-close>Kapat</button>' +
+          '<button class="btn btn-primary" id="copyBtn">' + Icons.copy({ size: 14 }) + ' Kopyala</button>' +
+          '<a class="btn" href="' + url + '" target="_blank" rel="noopener">' + Icons.eye({ size: 14 }) + ' Önizle</a>',
+        onMount: function (el, close) {
+          el.querySelector('#copyBtn').onclick = async function () {
+            await navigator.clipboard.writeText(url);
+            toast('Bağlantı kopyalandı', 'success');
+            close();
+          };
+        }
+      });
+    }
+
+    function showThemeModal() {
+      var curColor = (state.theme && state.theme.color) || 'indigo';
+      var curIcon = (state.theme && state.theme.icon) || '';
+      var curMode = (state.theme && state.theme.mode) || 'light';
+      var curMax = state.maxResponses || '';
+      var curClosedMsg = state.closedMessage || '';
+
+      var colorHtml = '<div class="theme-color-grid">' + FormThemeColors.map(function (c) {
+        return '<button type="button" class="theme-color-swatch' + (c.key === curColor ? ' active' : '') + '" data-color="' + c.key + '" style="background: linear-gradient(135deg, ' + c.from + ', ' + c.to + ')" title="' + esc(c.label) + '"></button>';
+      }).join('') + '</div>';
+
+      var iconHtml = '<div class="icon-picker-grid">' + FormIcons.map(function (em) {
+        return '<button type="button" data-icon="' + esc(em) + '" class="' + (em === curIcon ? 'active' : '') + '">' + (em || Icons.x({ size: 14 })) + '</button>';
+      }).join('') + '</div>';
+
+      var modeHtml = '<div style="display:grid; grid-template-columns:repeat(3,1fr); gap:8px">' +
+        modeBtn('light',  'Açık',   Icons.sun({ size: 14 }),     curMode === 'light') +
+        modeBtn('dark',   'Koyu',   Icons.moon({ size: 14 }),    curMode === 'dark') +
+        modeBtn('auto',   'Otomatik', Icons.monitor({ size: 14 }), curMode === 'auto') +
+      '</div>';
+
+      function modeBtn(val, label, icon, active) {
+        return '<button type="button" data-mode="' + val + '" class="btn' + (active ? ' btn-primary' : '') + '" style="justify-content:center">' + icon + ' ' + label + '</button>';
+      }
+
+      modal({
+        title: 'Form ayarları',
+        subtitle: 'Görünüm, limit ve durum mesajları.',
+        lg: true,
+        body:
+          '<div class="section-label" style="padding:0; margin-bottom:6px">Görünüm</div>' +
+          '<div class="field"><label class="field-label">Tema rengi</label>' + colorHtml + '</div>' +
+          '<div class="field"><label class="field-label">Form simgesi</label>' +
+            '<div class="field-hint" style="margin-bottom:8px">İlk seçenek "simge yok" anlamına gelir.</div>' + iconHtml +
+          '</div>' +
+          '<div class="field"><label class="field-label">Form sayfa modu</label>' +
+            '<div class="field-hint" style="margin-bottom:8px">Ziyaretçinin formu nasıl göreceği. Varsayılan: Açık.</div>' + modeHtml +
+          '</div>' +
+          '<div class="insp-divider"></div>' +
+          '<div class="section-label" style="padding:0; margin-bottom:6px">Limit & Mesaj</div>' +
+          '<div class="field">' +
+            '<label class="field-label">Maksimum yanıt sayısı</label>' +
+            '<input type="number" class="input" id="maxRespInput" min="0" step="1" value="' + esc(curMax) + '" placeholder="Sınırsız için boş bırakın">' +
+            '<div class="field-hint">Bu sayıya ulaşıldığında form otomatik olarak yanıt almayı durdurur ve "form dolu" mesajı gösterir.</div>' +
+          '</div>' +
+          '<div class="field">' +
+            '<label class="field-label">Kapalı / dolu mesajı (isteğe bağlı)</label>' +
+            '<textarea class="textarea" id="closedMsgInput" rows="2" placeholder="Bu form sahibi tarafından durdurulmuştur.">' + esc(curClosedMsg) + '</textarea>' +
+            '<div class="field-hint">Boş bırakırsanız varsayılan mesaj gösterilir.</div>' +
+          '</div>',
+        footer:
+          '<button class="btn" data-modal-close>Kapat</button>' +
+          '<button class="btn btn-primary" id="saveThemeBtn">' + Icons.save({ size: 14 }) + ' Kaydet</button>',
+        onMount: function (el, close) {
+          el.querySelectorAll('[data-color]').forEach(function (b) {
+            b.addEventListener('click', function () {
+              state.theme.color = b.dataset.color;
+              el.querySelectorAll('[data-color]').forEach(function (x) { x.classList.toggle('active', x === b); });
+              applyTheme();
+            });
+          });
+          el.querySelectorAll('[data-icon]').forEach(function (b) {
+            b.addEventListener('click', function () {
+              state.theme.icon = b.dataset.icon;
+              el.querySelectorAll('[data-icon]').forEach(function (x) { x.classList.toggle('active', x === b); });
+              applyTheme();
+            });
+          });
+          el.querySelectorAll('[data-mode]').forEach(function (b) {
+            b.addEventListener('click', function () {
+              state.theme.mode = b.dataset.mode;
+              el.querySelectorAll('[data-mode]').forEach(function (x) { x.classList.toggle('btn-primary', x === b); });
+            });
+          });
+          el.querySelector('#saveThemeBtn').onclick = function () {
+            var maxStr = el.querySelector('#maxRespInput').value.trim();
+            state.maxResponses = maxStr === '' ? null : Math.max(0, parseInt(maxStr, 10) || 0);
+            if (state.maxResponses === 0) state.maxResponses = null;
+            state.closedMessage = el.querySelector('#closedMsgInput').value;
+            applyTheme();
+            saveForm();
+            toast('Ayarlar kaydedildi', 'success');
+            close();
+          };
+        }
+      });
+    }
+
+    async function showNotificationsModal() {
+      var cfg = {};
+      try { cfg = await api('/api/forms/' + formId + '/notifications') || {}; } catch (e) {}
+      cfg.discord = cfg.discord || { enabled: false, webhookUrl: '' };
+      cfg.telegram = cfg.telegram || { enabled: false, botToken: '', chatId: '' };
+      cfg.email = cfg.email || { enabled: false, smtpHost: '', smtpPort: 587, smtpUser: '', smtpPass: '', from: '', to: '' };
+
+      var discordIcon = '<svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><path d="M20.317 4.37a19.79 19.79 0 0 0-4.885-1.515.074.074 0 0 0-.079.037c-.21.375-.444.864-.608 1.25a18.27 18.27 0 0 0-5.487 0 12.64 12.64 0 0 0-.617-1.25.077.077 0 0 0-.079-.037A19.736 19.736 0 0 0 3.677 4.37a.07.07 0 0 0-.032.027C.533 9.046-.32 13.58.099 18.057a.082.082 0 0 0 .031.057 19.9 19.9 0 0 0 5.993 3.03.078.078 0 0 0 .084-.028 14.09 14.09 0 0 0 1.226-1.994.076.076 0 0 0-.041-.106 13.107 13.107 0 0 1-1.872-.892.077.077 0 0 1-.008-.128 10.2 10.2 0 0 0 .372-.292.074.074 0 0 1 .077-.01c3.928 1.793 8.18 1.793 12.062 0a.074.074 0 0 1 .078.01c.12.098.246.198.373.292a.077.077 0 0 1-.006.127 12.299 12.299 0 0 1-1.873.892.077.077 0 0 0-.041.107c.36.698.772 1.362 1.225 1.993a.076.076 0 0 0 .084.028 19.839 19.839 0 0 0 6.002-3.03.077.077 0 0 0 .032-.054c.5-5.177-.838-9.674-3.549-13.66a.061.061 0 0 0-.031-.03zM8.02 15.33c-1.183 0-2.157-1.085-2.157-2.419 0-1.333.956-2.419 2.157-2.419 1.21 0 2.176 1.096 2.157 2.42 0 1.333-.956 2.418-2.157 2.418zm7.975 0c-1.183 0-2.157-1.085-2.157-2.419 0-1.333.955-2.419 2.157-2.419 1.21 0 2.176 1.096 2.157 2.42 0 1.333-.946 2.418-2.157 2.418z"/></svg>';
+      var telegramIcon = '<svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><path d="M11.944 0A12 12 0 0 0 0 12a12 12 0 0 0 12 12 12 12 0 0 0 12-12A12 12 0 0 0 12 0a12 12 0 0 0-.056 0zm4.962 7.224c.1-.002.321.023.465.14a.506.506 0 0 1 .171.325c.016.093.036.306.02.472-.18 1.898-.962 6.502-1.36 8.627-.168.9-.499 1.201-.82 1.23-.696.065-1.225-.46-1.9-.902-1.056-.693-1.653-1.124-2.678-1.8-1.185-.78-.417-1.21.258-1.91.177-.184 3.247-2.977 3.307-3.23.007-.032.014-.15-.056-.212s-.174-.041-.249-.024c-.106.024-1.793 1.14-5.061 3.345-.48.33-.913.49-1.302.48-.428-.008-1.252-.241-1.865-.44-.752-.245-1.349-.374-1.297-.789.027-.216.325-.437.893-.663 3.498-1.524 5.83-2.529 6.998-3.014 3.332-1.386 4.025-1.627 4.476-1.635z"/></svg>';
+      var emailIcon = Icons.email({ size: 18 });
+
+      function channel(opts) {
+        return '<div class="notif-channel' + (opts.enabled ? ' enabled' : '') + '" data-channel="' + opts.key + '">' +
+          '<div class="notif-channel-header">' +
+            '<div class="notif-channel-icon ' + opts.key + '">' + opts.icon + '</div>' +
+            '<div style="flex:1; min-width:0">' +
+              '<div style="font-weight:600; font-size:14px">' + opts.title + '</div>' +
+              '<div class="text-small text-muted">' + opts.subtitle + '</div>' +
+            '</div>' +
+            '<label class="toggle-row" style="padding:0">' +
+              '<input type="checkbox" data-enable="' + opts.key + '"' + (opts.enabled ? ' checked' : '') + '>' +
+              '<span class="toggle-switch"></span>' +
+            '</label>' +
+          '</div>' +
+          '<div class="notif-channel-body">' + opts.body + '</div>' +
+        '</div>';
+      }
+
+      function pwInput(id, channelPath, value) {
+        return '<div class="input-wrap">' +
+          '<input type="password" id="' + id + '" class="input" data-channel-input="' + channelPath + '" value="' + esc(value) + '">' +
+          '<button type="button" class="input-action" data-toggle-pw aria-label="Şifreyi göster"></button>' +
+        '</div>';
+      }
+
+      var discordBody =
+        '<div class="field">' +
+          '<label class="field-label">Webhook URL</label>' +
+          '<input class="input" data-channel-input="discord.webhookUrl" value="' + esc(cfg.discord.webhookUrl) + '" placeholder="https://discord.com/api/webhooks/...">' +
+          '<div class="field-hint">Sunucu Ayarları → Entegrasyonlar → Webhook\'lar üzerinden oluşturun.</div>' +
+        '</div>' +
+        '<button class="test-btn" data-test="discord">' + Icons.play({ size: 12 }) + ' Test bildirimi gönder</button>';
+
+      var telegramBody =
+        '<div class="field">' +
+          '<label class="field-label">Bot token</label>' +
+          pwInput('tgBot', 'telegram.botToken', cfg.telegram.botToken) +
+          '<div class="field-hint">@BotFather ile bot oluşturup token alın.</div>' +
+        '</div>' +
+        '<div class="field">' +
+          '<label class="field-label">Chat ID</label>' +
+          '<input class="input" data-channel-input="telegram.chatId" value="' + esc(cfg.telegram.chatId) + '" placeholder="-1001234567890 veya 123456789">' +
+          '<div class="field-hint">@userinfobot kullanın veya bot\'u kanala ekleyip mesaj atın.</div>' +
+        '</div>' +
+        '<button class="test-btn" data-test="telegram">' + Icons.play({ size: 12 }) + ' Test bildirimi gönder</button>';
+
+      var emailBody =
+        '<div style="display:grid; grid-template-columns:2fr 1fr; gap:10px">' +
+          '<div class="field"><label class="field-label">SMTP sunucusu</label>' +
+            '<input class="input" data-channel-input="email.smtpHost" value="' + esc(cfg.email.smtpHost) + '" placeholder="smtp.gmail.com"></div>' +
+          '<div class="field"><label class="field-label">Port</label>' +
+            '<input type="number" class="input" data-channel-input="email.smtpPort" value="' + (cfg.email.smtpPort || 587) + '"></div>' +
+        '</div>' +
+        '<div class="field"><label class="field-label">Kullanıcı adı</label>' +
+          '<input class="input" data-channel-input="email.smtpUser" value="' + esc(cfg.email.smtpUser) + '" placeholder="ornek@gmail.com"></div>' +
+        '<div class="field"><label class="field-label">Şifre / App password</label>' +
+          pwInput('smtpPw', 'email.smtpPass', cfg.email.smtpPass) +
+        '</div>' +
+        '<div class="field"><label class="field-label">Gönderen (From)</label>' +
+          '<input class="input" data-channel-input="email.from" value="' + esc(cfg.email.from) + '" placeholder="noreply@example.com"></div>' +
+        '<div class="field"><label class="field-label">Alıcı (To)</label>' +
+          '<input class="input" data-channel-input="email.to" value="' + esc(cfg.email.to) + '" placeholder="admin@example.com (virgülle birden fazla)"></div>' +
+        '<button class="test-btn" data-test="email">' + Icons.play({ size: 12 }) + ' Test e-postası gönder</button>';
+
+      var body =
+        '<p class="text-small text-muted mb-3">Form her yanıtlandığında etkin kanallara bildirim gönderilir. Tüm bilgiler bu formla sınırlı kalır.</p>' +
+        channel({ key: 'discord',  title: 'Discord',         subtitle: 'Webhook URL ile mesaj gönder',         icon: discordIcon,  enabled: cfg.discord.enabled,  body: discordBody  }) +
+        channel({ key: 'telegram', title: 'Telegram',        subtitle: 'Bot token + chat ID ile mesaj gönder', icon: telegramIcon, enabled: cfg.telegram.enabled, body: telegramBody }) +
+        channel({ key: 'email',    title: 'E-posta (SMTP)',  subtitle: 'Yanıt bildirimini e-postaya gönder',   icon: emailIcon,    enabled: cfg.email.enabled,    body: emailBody    });
+
+      modal({
+        title: 'Bildirimler',
+        subtitle: 'Her form yanıtlandığında otomatik olarak bildirim alın.',
+        lg: true,
+        body: body,
+        footer:
+          '<button class="btn" data-modal-close>Kapat</button>' +
+          '<button class="btn btn-primary" id="saveNotif">' + Icons.save({ size: 14 }) + ' Kaydet</button>',
+        onMount: function (el, close) {
+          el.querySelectorAll('[data-enable]').forEach(function (cb) {
+            cb.addEventListener('change', function () {
+              var card = cb.closest('.notif-channel');
+              card.classList.toggle('enabled', cb.checked);
+              setNotifVal(cfg, cb.dataset.enable + '.enabled', cb.checked);
+            });
+          });
+          el.querySelectorAll('[data-channel-input]').forEach(function (ip) {
+            ip.addEventListener('input', function () {
+              var v = ip.type === 'number' ? Number(ip.value) : ip.value;
+              setNotifVal(cfg, ip.dataset.channelInput, v);
+            });
+          });
+          el.querySelector('#saveNotif').onclick = async function () {
+            try {
+              await api('/api/forms/' + formId + '/notifications', { method: 'PUT', body: cfg });
+              toast('Bildirim ayarları kaydedildi', 'success');
+              close();
+            } catch (e) { toast(e.message, 'error'); }
+          };
+          el.querySelectorAll('[data-test]').forEach(function (b) {
+            b.addEventListener('click', async function () {
+              try {
+                await api('/api/forms/' + formId + '/notifications', { method: 'PUT', body: cfg });
+                await api('/api/forms/' + formId + '/notifications/test', { method: 'POST' });
+                toast('Test bildirimi gönderildi', 'success');
+              } catch (e) { toast(e.message, 'error'); }
+            });
+          });
+        }
+      });
+    }
+
+    function setNotifVal(obj, path, val) {
+      var parts = path.split('.');
+      var cur = obj;
+      for (var i = 0; i < parts.length - 1; i++) {
+        if (!cur[parts[i]]) cur[parts[i]] = {};
+        cur = cur[parts[i]];
+      }
+      cur[parts[parts.length - 1]] = val;
+    }
+
+    // Keyboard shortcuts
+    document.addEventListener('keydown', function (e) {
+      if ((e.metaKey || e.ctrlKey) && e.key === 's') {
+        e.preventDefault();
+        saveForm();
+      }
+      if (e.key === 'Delete' && selectedFieldId && ['INPUT', 'TEXTAREA'].indexOf(document.activeElement.tagName) < 0) {
+        deleteField(selectedFieldId);
+      }
+    });
+
+    canvas.addEventListener('click', function (e) {
+      if (e.target === canvas || e.target.classList.contains('form-container')) {
+        selectedFieldId = null;
+        document.querySelectorAll('.field-item').forEach(function (item) { item.classList.remove('selected'); });
+        renderInspector();
+      }
+    });
+
+    init();
+  </script>
+</body>
+</html>
