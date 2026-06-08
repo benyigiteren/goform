@@ -257,6 +257,7 @@
   /* ===== Confirm dialog ===== */
   root.confirmDialog = function (opts) {
     return new Promise(function (resolve) {
+      var done = false;
       var m = modal({
         title: opts.title || 'Onayla',
         subtitle: opts.subtitle || '',
@@ -267,11 +268,17 @@
             esc(opts.confirmText || 'Onayla') + '</button>',
         onMount: function (el) {
           el.querySelector('[data-confirm]').onclick = function () {
-            m.close();
+            if (done) return;
+            done = true;
             resolve(true);
+            m.close();
           };
         },
-        onClose: function () { resolve(false); },
+        onClose: function () {
+          if (done) return;
+          done = true;
+          resolve(false);
+        },
       });
     });
   };

@@ -72,15 +72,17 @@
       case 'radio':
         return '<div class="choices">' + (field.options || []).map(function (opt) {
           return '<label class="choice-row" style="cursor:' + (interactive ? 'pointer' : 'default') + '">' +
-            '<input type="radio" name="' + field.id + '" value="' + esc(opt) + '" ' + disabled + (value === opt ? ' checked' : '') + ' data-field="' + field.id + '">' +
-            '<span>' + esc(opt) + '</span></label>';
+            '<input type="radio" class="choice-input" name="' + field.id + '" value="' + esc(opt) + '" ' + disabled + (value === opt ? ' checked' : '') + ' data-field="' + field.id + '">' +
+            '<span class="choice-marker choice-radio" aria-hidden="true"><span class="choice-dot"></span></span>' +
+            '<span class="choice-label">' + esc(opt) + '</span></label>';
         }).join('') + '</div>';
       case 'checkbox':
         var arr = Array.isArray(value) ? value : [];
         return '<div class="choices">' + (field.options || []).map(function (opt) {
           return '<label class="choice-row" style="cursor:' + (interactive ? 'pointer' : 'default') + '">' +
-            '<input type="checkbox" name="' + field.id + '" value="' + esc(opt) + '" ' + disabled + (arr.indexOf(opt) >= 0 ? ' checked' : '') + ' data-field="' + field.id + '">' +
-            '<span>' + esc(opt) + '</span></label>';
+            '<input type="checkbox" class="choice-input" name="' + field.id + '" value="' + esc(opt) + '" ' + disabled + (arr.indexOf(opt) >= 0 ? ' checked' : '') + ' data-field="' + field.id + '">' +
+            '<span class="choice-marker choice-check" aria-hidden="true"><svg class="ic" viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"></polyline></svg></span>' +
+            '<span class="choice-label">' + esc(opt) + '</span></label>';
         }).join('') + '</div>';
       case 'dropdown':
         return '<select class="select" ' + disabled + ' data-field="' + field.id + '">' +
